@@ -1,0 +1,41 @@
+rules_version = '2';
+// La Tanière PinpinRex : règles de sécurité Firestore
+// Seuls les membres d'une Tanière (foyer) peuvent lire et écrire ses données.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isMember(hid) {
+      return signedIn() && request.auth.uid in get(/databases/$(database)/documents/households/$(hid)).data.members;
+    }
+
+    // Profil : chacun ne voit que le sien (il indique à quelle Tanière il appartient)
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Codes d'invitation : lisibles un par un (pas de liste) par une personne connectée
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn() && isMember(request.resource.data.hid);
+      allow delete: if signedIn() && isMember(resource.data.hid);
+    }
+
+    match /households/{hid} {
+      allow create: if signedIn() && request.resource.data.members == [request.auth.uid];
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+      // Un membre peut tout modifier ; une nouvelle personne peut seulement s'ajouter elle-même avec le bon code
+      allow update: if signedIn() && (
+        request.auth.uid in resource.data.members ||
+        (request.resource.data.members == resource.data.members.concat([request.auth.uid])
+          && request.resource.data.lastJoinCode == resource.data.inviteCode
+          && request.resource.data.inviteCode == resource.data.inviteCode)
+      );
+      allow delete: if false;
+
+      // Toutes les données de la Tanière (tickets, factures, budget, photos…)
+      match /{document=**} {
+        allow read, write: if isMember(hid);
+      }
+    }
+  }
+}
